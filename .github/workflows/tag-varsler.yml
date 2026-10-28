@@ -1,0 +1,51 @@
+name: TAG-varsler
+
+# Tidene er i UTC. Norge har vintertid (UTC+1) hele november:
+#   07:00 UTC = 08:00 norsk tid  -> «Pingen er åpen» (alle)
+#   11:00 UTC = 12:00 norsk tid  -> «Husk å pinge» (kun de som mangler)
+#   13:00 UTC = 14:00 norsk tid  -> «Siste sjanse» (kun de som mangler)
+# I tillegg hvert 10. minutt: sjekker om taggen har fått ny eier («Vi har en ny fag!»).
+# Kjører bare i november. GitHub kan av og til bruke noen minutter ekstra.
+on:
+  schedule:
+    - cron: "0 7 * 11 *"
+    - cron: "0 11 * 11 *"
+    - cron: "0 13 * 11 *"
+    - cron: "*/10 * * 11 *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Hvilket varsel? (test, morgen, paaminn, siste, tagsjekk)"
+        required: true
+        default: "test"
+
+concurrency:
+  group: tag-varsler-${{ github.event.schedule || 'manuell' }}
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - name: Velg varsel
+        id: mode
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 7 * 11 *")  echo "mode=morgen"  >> "$GITHUB_OUTPUT" ;;
+            "0 11 * 11 *") echo "mode=paaminn" >> "$GITHUB_OUTPUT" ;;
+            "0 13 * 11 *") echo "mode=siste"   >> "$GITHUB_OUTPUT" ;;
+            "*/10 * * 11 *") echo "mode=tagsjekk" >> "$GITHUB_OUTPUT" ;;
+            *)             echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: Send varsler
+        run: node send.js "${{ steps.mode.outputs.mode }}"
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GAME_CODE: ${{ secrets.GAME_CODE }}
+          APP_URL: ${{ vars.APP_URL }}
+          DEADLINE: "15:00"
