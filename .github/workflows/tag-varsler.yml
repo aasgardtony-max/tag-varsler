@@ -1,25 +1,31 @@
 name: TAG-varsler
 
-# Tidene er i UTC. Norge har vintertid (UTC+1) hele november:
-#   07:00 UTC = 08:00 norsk tid  -> «Pingen er åpen» (alle)
-#   11:00 UTC = 12:00 norsk tid  -> «Husk å pinge» (kun de som mangler)
-#   13:00 UTC = 14:00 norsk tid  -> «Siste sjanse» (kun de som mangler)
-#   14:00 UTC = 15:00 norsk tid  -> «Du fikk bot» (kun de som ikke pinget i tide)
-#   23:00 UTC 31. okt = midnatt 1. nov -> spillet starter, START_NICK får taggen
+# Tidene er i UTC. Norge har vintertid (UTC+1) hele november.
+# Kjøringene ligger noen minutter unna hele timer, fordi GitHub er tregest akkurat på hel time.
+#   07:02 UTC = 08:02 norsk tid  -> «Pingen er åpen» (alle)
+#   10:57 UTC = 11:57 norsk tid  -> «Husk å pinge» (kun de som mangler)
+#   12:57 UTC = 13:57 norsk tid  -> «Siste sjanse» (kun de som mangler)
+#   14:03 UTC = 15:03 norsk tid  -> «Du fikk bot» (kun de som ikke pinget i tide)
+#   19:03 UTC søndager = 20:03   -> ukesoppsummering (fra 8. november)
+#   23:01 UTC 31. okt = 00:01 1. nov -> spillet starter, START_NICK får taggen
+#   23:15 og 23:40 UTC 31. okt   -> reserve hvis GitHub hoppet over starten (gjør ingenting ellers)
 # I tillegg hvert 10. minutt: sjekker om taggen har fått ny eier («Vi har en ny fag!»).
 # Kjører bare i november. GitHub kan av og til bruke noen minutter ekstra.
 on:
   schedule:
-    - cron: "0 7 * 11 *"
-    - cron: "0 11 * 11 *"
-    - cron: "0 13 * 11 *"
+    - cron: "2 7 * 11 *"
+    - cron: "57 10 * 11 *"
+    - cron: "57 12 * 11 *"
     - cron: "*/10 * * 11 *"
-    - cron: "0 14 * 11 *"
-    - cron: "0 23 31 10 *"
+    - cron: "3 14 * 11 *"
+    - cron: "3 19 * 11 0"
+    - cron: "1 23 31 10 *"
+    - cron: "15 23 31 10 *"
+    - cron: "40 23 31 10 *"
   workflow_dispatch:
     inputs:
       mode:
-        description: "Hvilket varsel? (test, morgen, paaminn, siste, tagsjekk, bot, start)"
+        description: "Hvilket varsel? (test, morgen, paaminn, siste, tagsjekk, bot, uke, start)"
         required: true
         default: "test"
 
@@ -40,13 +46,14 @@ jobs:
         id: mode
         run: |
           case "${{ github.event.schedule }}" in
-            "0 7 * 11 *")  echo "mode=morgen"  >> "$GITHUB_OUTPUT" ;;
-            "0 11 * 11 *") echo "mode=paaminn" >> "$GITHUB_OUTPUT" ;;
-            "0 13 * 11 *") echo "mode=siste"   >> "$GITHUB_OUTPUT" ;;
+            "2 7 * 11 *")    echo "mode=morgen"   >> "$GITHUB_OUTPUT" ;;
+            "57 10 * 11 *")  echo "mode=paaminn"  >> "$GITHUB_OUTPUT" ;;
+            "57 12 * 11 *")  echo "mode=siste"    >> "$GITHUB_OUTPUT" ;;
             "*/10 * * 11 *") echo "mode=tagsjekk" >> "$GITHUB_OUTPUT" ;;
-            "0 14 * 11 *") echo "mode=bot"     >> "$GITHUB_OUTPUT" ;;
-            "0 23 31 10 *") echo "mode=start"  >> "$GITHUB_OUTPUT" ;;
-            *)             echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT" ;;
+            "3 14 * 11 *")   echo "mode=bot"      >> "$GITHUB_OUTPUT" ;;
+            "3 19 * 11 0")   echo "mode=uke"      >> "$GITHUB_OUTPUT" ;;
+            "1 23 31 10 *"|"15 23 31 10 *"|"40 23 31 10 *") echo "mode=start" >> "$GITHUB_OUTPUT" ;;
+            *)               echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT" ;;
           esac
       - name: Send varsler
         run: node send.js "${{ steps.mode.outputs.mode }}"
