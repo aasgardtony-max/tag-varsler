@@ -56,6 +56,7 @@ if (mode === "bot") {
   admin.initializeApp({ credential: admin.credential.cert(JSON.parse(FIREBASE_SERVICE_ACCOUNT)) });
   const db = admin.firestore(), game = db.collection("games").doc(GAME_CODE);
   const today = osloDay(new Date()), year = today.slice(0, 4), month = today.slice(5, 7);
+  if (month !== String(process.env.GAME_MONTH || 11).padStart(2, "0")) { console.log("Ikke sesong nå. Ingen bot sendt."); process.exit(0); }
   const botSnap = await game.collection("state").doc(`botkassa-${year}`).get();
   const bot = botSnap.exists ? botSnap.data() : {};
   const players = await game.collection("players").get();
