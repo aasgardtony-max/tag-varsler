@@ -4,6 +4,8 @@ name: TAG-varsler
 #   07:00 UTC = 08:00 norsk tid  -> «Pingen er åpen» (alle)
 #   11:00 UTC = 12:00 norsk tid  -> «Husk å pinge» (kun de som mangler)
 #   13:00 UTC = 14:00 norsk tid  -> «Siste sjanse» (kun de som mangler)
+#   14:00 UTC = 15:00 norsk tid  -> «Du fikk bot» (kun de som ikke pinget i tide)
+#   23:00 UTC 31. okt = midnatt 1. nov -> spillet starter, START_NICK får taggen
 # I tillegg hvert 10. minutt: sjekker om taggen har fått ny eier («Vi har en ny fag!»).
 # Kjører bare i november. GitHub kan av og til bruke noen minutter ekstra.
 on:
@@ -12,10 +14,12 @@ on:
     - cron: "0 11 * 11 *"
     - cron: "0 13 * 11 *"
     - cron: "*/10 * * 11 *"
+    - cron: "0 14 * 11 *"
+    - cron: "0 23 31 10 *"
   workflow_dispatch:
     inputs:
       mode:
-        description: "Hvilket varsel? (test, morgen, paaminn, siste, tagsjekk)"
+        description: "Hvilket varsel? (test, morgen, paaminn, siste, tagsjekk, bot, start)"
         required: true
         default: "test"
 
@@ -40,6 +44,8 @@ jobs:
             "0 11 * 11 *") echo "mode=paaminn" >> "$GITHUB_OUTPUT" ;;
             "0 13 * 11 *") echo "mode=siste"   >> "$GITHUB_OUTPUT" ;;
             "*/10 * * 11 *") echo "mode=tagsjekk" >> "$GITHUB_OUTPUT" ;;
+            "0 14 * 11 *") echo "mode=bot"     >> "$GITHUB_OUTPUT" ;;
+            "0 23 31 10 *") echo "mode=start"  >> "$GITHUB_OUTPUT" ;;
             *)             echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT" ;;
           esac
       - name: Send varsler
@@ -49,3 +55,6 @@ jobs:
           GAME_CODE: ${{ secrets.GAME_CODE }}
           APP_URL: ${{ vars.APP_URL }}
           DEADLINE: "15:00"
+          OPEN_TIME: "08:00"
+          BOT_AMOUNT: "100"
+          START_NICK: ${{ vars.START_NICK || 'Isak' }}
