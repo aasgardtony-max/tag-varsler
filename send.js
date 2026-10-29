@@ -26,6 +26,12 @@ const MESSAGES = {
 const OPEN_TIME = process.env.OPEN_TIME || "08:00";
 const BOT_AMOUNT = +(process.env.BOT_AMOUNT || 100);
 const osloDay = d => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Oslo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+// Hadde spilleren taggen en gang i pingvinduet (OPEN_TIME–DEADLINE) den dagen? Da er dagen fritatt.
+const heldDuring = (hist, id, k) => {
+  const a = new Date(`${k}T${OPEN_TIME}:00+01:00`).getTime(), b = new Date(`${k}T${DEADLINE}:00+01:00`).getTime();
+  for (let i = 0; i < hist.length; i++) { const st = hist[i].at, en = i === 0 ? Infinity : hist[i - 1].at; if (hist[i].to === id && st < b && en > a) return true; }
+  return false;
+};
 const osloHm = d => new Intl.DateTimeFormat("nb-NO", { timeZone: "Europe/Oslo", hour: "2-digit", minute: "2-digit" }).format(d);
 
 // ---------- Spillstart: gir taggen til startspilleren ved midnatt 1. november ----------
@@ -59,6 +65,8 @@ if (mode === "bot") {
   if (month !== String(process.env.GAME_MONTH || 11).padStart(2, "0")) { console.log("Ikke sesong nå. Ingen bot sendt."); process.exit(0); }
   const botSnap = await game.collection("state").doc(`botkassa-${year}`).get();
   const bot = botSnap.exists ? botSnap.data() : {};
+  const tagSnap = await game.collection("state").doc("tag").get();
+  const hist = tagSnap.exists ? (tagSnap.data().history || []) : [];
   const players = await game.collection("players").get();
   const list = [];
   for (const d of players.docs) {
@@ -66,9 +74,9 @@ if (mode === "bot") {
     const okDays = new Set();
     for (const e of p.history || []) { const dt = new Date(e.at), t = osloHm(dt); if (t >= OPEN_TIME && t < DEADLINE) okDays.add(osloDay(dt)); }
     const forgiven = new Set(((bot.forgiven || {})[d.id]) || []);
-    if (okDays.has(today) || forgiven.has(today)) continue;
+    if (okDays.has(today) || forgiven.has(today) || heldDuring(hist, d.id, today)) continue;
     let missed = 0;
-    for (let i = 1; i <= +today.slice(8, 10); i++) { const k = `${year}-${month}-${String(i).padStart(2, "0")}`; if (!okDays.has(k) && !forgiven.has(k)) missed++; }
+    for (let i = 1; i <= +today.slice(8, 10); i++) { const k = `${year}-${month}-${String(i).padStart(2, "0")}`; if (!okDays.has(k) && !forgiven.has(k) && !heldDuring(hist, d.id, k)) missed++; }
     const left = Math.max(0, missed * BOT_AMOUNT - (((bot.paid || {})[d.id]) || 0));
     list.push({ id: d.id, token: p.pushToken, title: `Du fikk ${BOT_AMOUNT} kr i bot 💸`,
       body: `Du pinget ikke innen kl. ${DEADLINE} i dag. Du skylder nå ${left} kr i botkassa${bot.vipps ? ` (Vipps ${bot.vipps})` : ""}.` });
@@ -148,11 +156,16 @@ const today = dayKey(new Date());
 
 const msg = MESSAGES[mode];
 const snap = await db.collection("games").doc(GAME_CODE).collection("players").get();
+const tagDoc = await db.collection("games").doc(GAME_CODE).collection("state").doc("tag").get();
+const fagId = tagDoc.exists ? tagDoc.data().it : null; // faggen slipper å pinge
+const tagHist = tagDoc.exists ? (tagDoc.data().history || []) : [];
 
 const targets = [];
 for (const d of snap.docs) {
   const p = d.data();
   if (!p.pushToken) continue;
+  if (mode !== "test" && d.id === fagId) continue;
+  if (msg.onlyMissing && heldDuring(tagHist, d.id, today)) continue; // har hatt taggen i dag = fritatt
   const pinged = p.latest && dayKey(new Date(p.latest.at)) === today;
   if (msg.onlyMissing && pinged) continue;
   targets.push({ id: d.id, nick: p.nick, token: p.pushToken });
