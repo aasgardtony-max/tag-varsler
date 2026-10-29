@@ -5,7 +5,8 @@
 //   node send.js paaminn   -> kun de som mangler: «Husk å pinge»
 //   node send.js siste     -> kun de som mangler: «Siste sjanse»
 //   node send.js test      -> alle:            testvarsel
-//   node send.js tagsjekk  -> alle:            «Vi har en ny fag!» hvis taggen har byttet eier
+//   node send.js tagsjekk  -> alle:            «Vi har en ny fag!» hvis taggen har byttet eier,
+//                             og varsel til faggen om nye pinger
 //   node send.js start     -> alle:            starter sesongen, START_NICK får taggen
 //   node send.js bot       -> kun de som mangler: «Du fikk bot» kl. 15
 
@@ -93,30 +94,50 @@ if (mode === "tagsjekk") {
   const game = db.collection("games").doc(GAME_CODE);
   const tagRef = game.collection("state").doc("tag");
   const tagSnap = await tagRef.get();
-  if (!tagSnap.exists) { console.log("Spillet har ikke startet."); process.exit(0); }
+  if (!tagSnap.exists || !tagSnap.data().it) { console.log("Spillet har ikke startet."); process.exit(0); }
   const tag = tagSnap.data();
-  const notifiedAt = tag.notifiedAt || 0;
-  const fresh = (tag.history || []).filter(h => h.at > notifiedAt && h.from);
-  if (!fresh.length || tag.since <= notifiedAt) { console.log("Ingen ny fag."); process.exit(0); }
-
   const players = await game.collection("players").get();
   const nick = id => (players.docs.find(d => d.id === id)?.data().nick) || "Noen";
-  const last = fresh[0]; // nyeste først
-  const extra = fresh.length > 1 ? ` (${fresh.length} bytter siden sist)` : "";
+  const update = {};
 
-  const messages = [];
-  for (const d of players.docs) {
-    const p = d.data(); if (!p.pushToken) continue;
-    const isNew = d.id === tag.it;
-    const title = isNew ? "Du har taggen! 🏁" : "🏁 Vi har en ny fag!";
-    const body = isNew
-      ? `${nick(last.from)} tok deg. Nå er det din tur.`
-      : d.id === last.from ? `Du tok ${nick(tag.it)}. Løp!` : `${nick(last.from)} tok ${nick(tag.it)}. ${nick(tag.it)} har taggen nå${extra}.`;
-    messages.push({ id: d.id, token: p.pushToken, title, body });
-  }
-  // Marker som varslet FØR sending, så samme bytte aldri varsles to ganger
-  await tagRef.update({ notifiedAt: tag.since });
-  await sendAll(db, game, messages);
+  // 1) Ny fag?
+  const notifiedAt = tag.notifiedAt || 0;
+  const fresh = (tag.history || []).filter(h => h.at > notifiedAt && h.from);
+  if (fresh.length && tag.since > notifiedAt) {
+    const last = fresh[0]; // nyeste først
+    const extra = fresh.length > 1 ? ` (${fresh.length} bytter siden sist)` : "";
+    const messages = [];
+    for (const d of players.docs) {
+      const p = d.data(); if (!p.pushToken) continue;
+      const isNew = d.id === tag.it;
+      const title = isNew ? "Du har taggen! 🏁" : "🏁 Vi har en ny fag!";
+      const body = isNew
+        ? `${nick(last.from)} tok deg. Nå er det din tur.`
+        : d.id === last.from ? `Du tok ${nick(tag.it)}. Løp!` : `${nick(last.from)} tok ${nick(tag.it)}. ${nick(tag.it)} har taggen nå${extra}.`;
+      messages.push({ id: d.id, token: p.pushToken, title, body });
+    }
+    // Marker som varslet FØR sending, så samme bytte aldri varsles to ganger
+    await tagRef.update({ notifiedAt: tag.since });
+    await sendAll(db, game, messages);
+  } else console.log("Ingen ny fag.");
+
+  // 2) Nye pinger siden sist -> varsel til faggen
+  const fagDoc = players.docs.find(d => d.id === tag.it);
+  const lower = Math.max(tag.pingsNotifiedAt || 0, tag.since || 0);
+  const newPings = players.docs
+    .filter(d => d.id !== tag.it && d.data().nick && d.data().latest && d.data().latest.at > lower)
+    .sort((a, b) => a.data().latest.at - b.data().latest.at);
+  if (!newPings.length) { console.log("Ingen nye pinger."); process.exit(0); }
+  const newest = Math.max(...newPings.map(d => d.data().latest.at));
+  await tagRef.update({ pingsNotifiedAt: newest });
+  if (!fagDoc || !fagDoc.data().pushToken) { console.log("Faggen har ikke varsler på."); process.exit(0); }
+  const names = newPings.map(d => d.data().nick);
+  const list = names.length === 1
+    ? `${names[0]} pinget kl. ${osloHm(new Date(newPings[0].data().latest.at))}`
+    : `${names.slice(0, -1).join(", ")} og ${names[names.length - 1]} har pinget`;
+  await sendAll(db, game, [{ id: fagDoc.id, token: fagDoc.data().pushToken,
+    title: names.length === 1 ? `📍 ${names[0]} pinget nå` : `📍 ${names.length} nye pinger`,
+    body: `${list}. Se hvor på kartet.` }]);
   process.exit(0);
 }
 
