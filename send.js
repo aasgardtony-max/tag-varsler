@@ -6,6 +6,8 @@
 //   node send.js siste     -> kun de som mangler: «Siste sjanse»
 //   node send.js test      -> alle:            testvarsel
 //   node send.js tagsjekk  -> alle:            «Vi har en ny fag!» hvis taggen har byttet eier
+//   node send.js start     -> alle:            starter sesongen, START_NICK får taggen
+//   node send.js bot       -> kun de som mangler: «Du fikk bot» kl. 15
 
 import admin from "firebase-admin";
 
@@ -20,6 +22,59 @@ const MESSAGES = {
   siste:   { onlyMissing: true,  title: "Siste sjanse! ⏰",              body: `Du må pinge før kl. ${DEADLINE}. Det er ikke lenge igjen.` },
   test:    { onlyMissing: false, title: "TAG test ✅",                   body: "Varslene fungerer!" }
 };
+
+const OPEN_TIME = process.env.OPEN_TIME || "08:00";
+const BOT_AMOUNT = +(process.env.BOT_AMOUNT || 100);
+const osloDay = d => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Oslo", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+const osloHm = d => new Intl.DateTimeFormat("nb-NO", { timeZone: "Europe/Oslo", hour: "2-digit", minute: "2-digit" }).format(d);
+
+// ---------- Spillstart: gir taggen til startspilleren ved midnatt 1. november ----------
+//   node send.js start   (START_NICK = navnet på den som starter som fag, standard «Isak»)
+if (mode === "start") {
+  if (!FIREBASE_SERVICE_ACCOUNT || !GAME_CODE) { console.error("Mangler FIREBASE_SERVICE_ACCOUNT eller GAME_CODE."); process.exit(1); }
+  admin.initializeApp({ credential: admin.credential.cert(JSON.parse(FIREBASE_SERVICE_ACCOUNT)) });
+  const db = admin.firestore(), game = db.collection("games").doc(GAME_CODE);
+  const want = (process.env.START_NICK || "Isak").trim().toLowerCase();
+  const players = await game.collection("players").get();
+  const match = players.docs.filter(d => (d.data().nick || "").trim().toLowerCase() === want)
+    .sort((a, b) => ((b.data().pushToken ? 1 : 0) - (a.data().pushToken ? 1 : 0)) || (((b.data().latest || {}).at || 0) - ((a.data().latest || {}).at || 0)));
+  if (!match.length) { console.error(`Fant ingen spiller som heter «${process.env.START_NICK || "Isak"}». Taggen ble ikke gitt.`); process.exit(1); }
+  const it = match[0].id, nickName = match[0].data().nick, now = Date.now();
+  await game.collection("state").doc("tag").set({ it, prev: null, since: now, notifiedAt: now, history: [{ from: null, to: it, at: now, byAdmin: true }] });
+  console.log(`Spillet er startet. ${nickName} har taggen.`);
+  const year = osloDay(new Date()).slice(0, 4);
+  const list = players.docs.filter(d => d.data().pushToken).map(d => d.id === it
+    ? { id: d.id, token: d.data().pushToken, title: "Du starter som faggen! 🏁", body: `TAG ${year} er i gang. Lykke til med jakten!` }
+    : { id: d.id, token: d.data().pushToken, title: `🏁 TAG ${year} er i gang!`, body: `${nickName} starter som faggen. Pass på!` });
+  await sendAll(db, game, list);
+  process.exit(0);
+}
+
+// ---------- Bot-varsel kl. 15: til de som ikke pinget i tide i dag ----------
+if (mode === "bot") {
+  if (!FIREBASE_SERVICE_ACCOUNT || !GAME_CODE) { console.error("Mangler FIREBASE_SERVICE_ACCOUNT eller GAME_CODE."); process.exit(1); }
+  admin.initializeApp({ credential: admin.credential.cert(JSON.parse(FIREBASE_SERVICE_ACCOUNT)) });
+  const db = admin.firestore(), game = db.collection("games").doc(GAME_CODE);
+  const today = osloDay(new Date()), year = today.slice(0, 4), month = today.slice(5, 7);
+  const botSnap = await game.collection("state").doc(`botkassa-${year}`).get();
+  const bot = botSnap.exists ? botSnap.data() : {};
+  const players = await game.collection("players").get();
+  const list = [];
+  for (const d of players.docs) {
+    const p = d.data(); if (!p.nick || !p.pushToken) continue;
+    const okDays = new Set();
+    for (const e of p.history || []) { const dt = new Date(e.at), t = osloHm(dt); if (t >= OPEN_TIME && t < DEADLINE) okDays.add(osloDay(dt)); }
+    const forgiven = new Set(((bot.forgiven || {})[d.id]) || []);
+    if (okDays.has(today) || forgiven.has(today)) continue;
+    let missed = 0;
+    for (let i = 1; i <= +today.slice(8, 10); i++) { const k = `${year}-${month}-${String(i).padStart(2, "0")}`; if (!okDays.has(k) && !forgiven.has(k)) missed++; }
+    const left = Math.max(0, missed * BOT_AMOUNT - (((bot.paid || {})[d.id]) || 0));
+    list.push({ id: d.id, token: p.pushToken, title: `Du fikk ${BOT_AMOUNT} kr i bot 💸`,
+      body: `Du pinget ikke innen kl. ${DEADLINE} i dag. Du skylder nå ${left} kr i botkassa${bot.vipps ? ` (Vipps ${bot.vipps})` : ""}.` });
+  }
+  await sendAll(db, game, list);
+  process.exit(0);
+}
 
 // ---------- Ny fag: sjekk om taggen har byttet eier ----------
 if (mode === "tagsjekk") {
