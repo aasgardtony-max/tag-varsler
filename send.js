@@ -34,6 +34,10 @@ const heldDuring = (hist, id, k) => {
   return false;
 };
 const osloHm = d => new Intl.DateTimeFormat("nb-NO", { timeZone: "Europe/Oslo", hour: "2-digit", minute: "2-digit" }).format(d);
+// Innstillinger fra appen (Meg → Innstillinger). Mangler de, er alt på.
+const prefs = p => (p && p.prefs) || {};
+const quietNow = () => { const h = +osloHm(new Date()).slice(0, 2); return h >= 23 || h < 7; };
+const muted = p => prefs(p).quiet === true && quietNow(); // stille timer 23–07
 
 // ---------- Spillstart: gir taggen til startspilleren ved midnatt 1. november ----------
 //   node send.js start   (START_NICK = navnet på den som starter som fag, standard «Isak»)
@@ -50,7 +54,7 @@ if (mode === "start") {
   await game.collection("state").doc("tag").set({ it, prev: null, since: now, notifiedAt: now, history: [{ from: null, to: it, at: now, byAdmin: true }] });
   console.log(`Spillet er startet. ${nickName} har taggen.`);
   const year = osloDay(new Date()).slice(0, 4);
-  const list = players.docs.filter(d => d.data().pushToken).map(d => d.id === it
+  const list = players.docs.filter(d => d.data().pushToken && !muted(d.data())).map(d => d.id === it
     ? { id: d.id, token: d.data().pushToken, title: "Du starter som faggen! 🏁", body: `TAG ${year} er i gang. Lykke til med jakten!` }
     : { id: d.id, token: d.data().pushToken, title: `🏁 TAG ${year} er i gang!`, body: `${nickName} starter som faggen. Pass på!` });
   await sendAll(db, game, list);
@@ -108,7 +112,7 @@ if (mode === "tagsjekk") {
     const extra = fresh.length > 1 ? ` (${fresh.length} bytter siden sist)` : "";
     const messages = [];
     for (const d of players.docs) {
-      const p = d.data(); if (!p.pushToken) continue;
+      const p = d.data(); if (!p.pushToken || muted(p)) continue;
       const isNew = d.id === tag.it;
       const title = isNew ? "Du har taggen! 🏁" : "🏁 Vi har en ny fag!";
       const body = isNew
@@ -131,6 +135,7 @@ if (mode === "tagsjekk") {
   const newest = Math.max(...newPings.map(d => d.data().latest.at));
   await tagRef.update({ pingsNotifiedAt: newest });
   if (!fagDoc || !fagDoc.data().pushToken) { console.log("Faggen har ikke varsler på."); process.exit(0); }
+  if (prefs(fagDoc.data()).fagPing === false || muted(fagDoc.data())) { console.log("Faggen har skrudd av ping-varsler (eller stille timer)."); process.exit(0); }
   const names = newPings.map(d => d.data().nick);
   const list = names.length === 1
     ? `${names[0]} pinget kl. ${osloHm(new Date(newPings[0].data().latest.at))}`
@@ -186,6 +191,7 @@ for (const d of snap.docs) {
   const p = d.data();
   if (!p.pushToken) continue;
   if (mode !== "test" && d.id === fagId) continue;
+  if (mode !== "test" && (prefs(p).ping === false || muted(p))) continue; // har skrudd av ping-varsler
   if (msg.onlyMissing && heldDuring(tagHist, d.id, today)) continue; // har hatt taggen i dag = fritatt
   const pinged = p.latest && dayKey(new Date(p.latest.at)) === today;
   if (msg.onlyMissing && pinged) continue;
